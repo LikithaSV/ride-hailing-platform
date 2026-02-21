@@ -17,7 +17,7 @@ Multi-tenant, multi-region ride hailing backend + live frontend built with FastA
   - `POST /v1/drivers/{id}/register`
   - `POST /v1/trips/{id}/start`
   - `GET /v1/trips/{id}`
-  - `GET /v1/stream?tenant_id=...` (SSE live events)
+- `GET /v1/stream?tenant_id=...` (SSE live events)
 - Validation using Pydantic request schemas
 - Idempotency for all mutating APIs via `Idempotency-Key` header
 - Clean state transitions for ride and trip state machines
@@ -86,6 +86,8 @@ Multi-tenant, multi-region ride hailing backend + live frontend built with FastA
 - `backend/tests/test_api.py` tests
 - `frontend/index.html` split-screen Rider Console + Driver Console
 - `frontend/script.js` live API, predefined locations, pre-booking fare details
+- `docs/SYSTEM_DOCUMENTATION.md` complete architecture and implementation documentation
+- `docs/PERFORMANCE_REPORT_NEW_RELIC.md` New Relic performance report template + queries
 
 ## Run locally
 
@@ -192,3 +194,23 @@ export NEW_RELIC_ENABLED=true
 - Idempotency enforcement for mutable endpoints
 
 For production hardening add authentication/JWT, rate limits, WAF, and mTLS between services.
+
+## Notification Events
+
+Stream endpoint: `GET /v1/stream?tenant_id=...`
+
+Events emitted:
+- `driver.registered`
+- `driver.location.updated`
+- `driver.status.updated`
+- `ride.created`
+- `ride.assigned`
+- `ride.assignment_failed`
+- `ride.declined`
+- `ride.expired`
+- `trip.started`
+- `trip.ended`
+- `ride.completed`
+- `payment.updated`
+- `payment.success`
+- `payment.failed`

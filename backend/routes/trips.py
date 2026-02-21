@@ -60,6 +60,11 @@ async def end_trip_endpoint(
 
     status, body = run_idempotent(db, request.tenant_id, f"POST:/trips/{trip_id}/end", idempotency_key, _action)
     await event_bus.publish(request.tenant_id, "trip.ended", body)
+    await event_bus.publish(
+        request.tenant_id,
+        "ride.completed",
+        {"ride_id": body["ride_id"], "trip_id": body["trip_id"], "fare": body["fare"]},
+    )
     return body
 
 

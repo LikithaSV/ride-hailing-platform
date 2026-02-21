@@ -122,21 +122,42 @@ async def create_ride(
 
     status, body = run_idempotent(db, request.tenant_id, "POST:/rides", idempotency_key, _action)
     await event_bus.publish(request.tenant_id, "ride.created", body)
+    assignment = body.get("assignment", {})
+    if assignment.get("assigned"):
+        await event_bus.publish(
+            request.tenant_id,
+            "ride.assigned",
+            {
+                "ride_id": body.get("id"),
+                "driver_id": assignment.get("driver_id"),
+                "trip_id": assignment.get("trip_id"),
+                "distance_km": assignment.get("distance_km"),
+            },
+        )
+    else:
+        failure_event = "ride.expired" if "timeout" in str(assignment.get("reason", "")).lower() else "ride.assignment_failed"
+        await event_bus.publish(
+            request.tenant_id,
+            failure_event,
+            {"ride_id": body.get("id"), "reason": assignment.get("reason", "No available driver")},
+        )
     return body
 
 
 @router.get("/{ride_id}")
-def get_ride(ride_id: str, tenant_id: str, db: Session = Depends(get_db)):
+async def get_ride(ride_id: str, tenant_id: str, db: Session = Depends(get_db)):
     cache_key = f"ride:{tenant_id}:{ride_id}"
 
     def _producer():
         ride = db.query(Ride).filter(Ride.id == ride_id, Ride.tenant_id == tenant_id).first()
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
+        just_expired = False
         if is_ride_request_timed_out(ride):
             ride.status = "expired"
             db.commit()
             db.refresh(ride)
+            just_expired = True
         return {
             "id": ride.id,
             "tenant_id": ride.tenant_id,
@@ -150,6 +171,14 @@ def get_ride(ride_id: str, tenant_id: str, db: Session = Depends(get_db)):
             "created_at": ride.created_at.isoformat(),
             "updated_at": ride.updated_at.isoformat(),
             "status_reason": "No driver available within 5 minutes" if ride.status == "expired" else None,
+            "_just_expired": just_expired,
         }
 
-    return cached_json(cache_key, ttl_sec=3, producer=_producer)
+    body = cached_json(cache_key, ttl_sec=3, producer=_producer)
+    if body.pop("_just_expired", False):
+        await event_bus.publish(
+            tenant_id,
+            "ride.expired",
+            {"ride_id": body["id"], "reason": "No driver available within 5 minutes"},
+        )
+    return body

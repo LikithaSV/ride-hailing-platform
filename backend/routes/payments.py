@@ -32,4 +32,6 @@ async def create_payment(
 
     status, body = run_idempotent(db, request.tenant_id, "POST:/payments", idempotency_key, _action)
     await event_bus.publish(request.tenant_id, "payment.updated", body)
+    payment_event = "payment.success" if body.get("status") == "success" else "payment.failed"
+    await event_bus.publish(request.tenant_id, payment_event, body)
     return body

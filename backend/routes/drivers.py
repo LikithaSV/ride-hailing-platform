@@ -108,4 +108,22 @@ async def decline_ride(
 
     status, body = run_idempotent(db, request.tenant_id, f"POST:/drivers/{driver_id}/decline", idempotency_key, _action)
     await event_bus.publish(request.tenant_id, "ride.declined", body)
+    reassignment = body.get("reassignment", {})
+    if reassignment.get("assigned"):
+        await event_bus.publish(
+            request.tenant_id,
+            "ride.assigned",
+            {
+                "ride_id": body.get("ride_id"),
+                "driver_id": reassignment.get("driver_id"),
+                "trip_id": reassignment.get("trip_id"),
+                "distance_km": reassignment.get("distance_km"),
+            },
+        )
+    else:
+        await event_bus.publish(
+            request.tenant_id,
+            "ride.assignment_failed",
+            {"ride_id": body.get("ride_id"), "reason": reassignment.get("reason", "No available driver")},
+        )
     return body

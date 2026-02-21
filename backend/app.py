@@ -1,4 +1,6 @@
 import asyncio
+import datetime as dt
+import json
 import os
 from contextlib import asynccontextmanager
 
@@ -50,7 +52,17 @@ async def stream_events(tenant_id: str = Query(..., min_length=1)):
     async def event_generator():
         try:
             while True:
-                payload = await queue.get()
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    heartbeat = json.dumps(
+                        {
+                            "event_type": "stream.heartbeat",
+                            "payload": {"tenant_id": tenant_id, "ts": dt.datetime.utcnow().isoformat()},
+                        }
+                    )
+                    yield f"data: {heartbeat}\n\n"
+                    continue
                 yield f"data: {payload}\n\n"
         except asyncio.CancelledError:
             raise
