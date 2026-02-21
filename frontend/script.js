@@ -127,7 +127,7 @@ document.getElementById("estimateFareBtn").onclick = async () => {
     `<strong>Distance:</strong> ${estimate.distance_km} km | <strong>ETA:</strong> ~${estimate.eta_min} min`,
     `<strong>Fare without surge:</strong> Rs ${estimate.fare_without_surge}`,
     `<strong>Current surge:</strong> x${estimate.surge_multiplier} -> <strong>Payable now:</strong> Rs ${estimate.estimated_fare}`,
-    `<strong>Proof:</strong> ${estimate.surge_explanation.active_requests} active requests / ${estimate.surge_explanation.available_drivers} available drivers`,
+    `<strong>Load signal:</strong> ${estimate.surge_explanation.active_requests} active requests / ${estimate.surge_explanation.available_drivers} available drivers`,
   ].join("<br>");
 };
 

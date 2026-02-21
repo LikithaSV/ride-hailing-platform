@@ -117,7 +117,6 @@ def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: 
     redis_client = get_redis_client()
     now = dt.datetime.utcnow()
 
-    # Hot path: Redis-first location write for very high update throughput.
     if redis_client:
         meta_key = _redis_driver_meta_key(driver_id)
         meta = redis_client.hgetall(meta_key)
@@ -139,7 +138,6 @@ def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: 
             pipe.expire(_redis_geo_key(tenant_id, region, vehicle_tier), settings.driver_meta_ttl_sec)
             pipe.execute()
 
-            # Write-behind throttle: sync operational DB once per interval per driver.
             sync_key = f"driver_dbsync:{driver_id}"
             should_sync = redis_client.set(sync_key, "1", ex=settings.location_db_sync_interval_sec, nx=True)
             if should_sync:
@@ -167,7 +165,6 @@ def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: 
                 "last_seen_at": now.isoformat(),
             }
 
-    # Fallback path: DB-first.
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found; register driver first")

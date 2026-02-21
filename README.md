@@ -85,7 +85,7 @@ Multi-tenant, multi-region ride hailing backend + live frontend built with FastA
 - `backend/models.sql` PostgreSQL schema
 - `backend/tests/test_api.py` tests
 - `frontend/index.html` split-screen Rider Console + Driver Console
-- `frontend/script.js` live API, predefined locations, pre-booking fare proof
+- `frontend/script.js` live API, predefined locations, pre-booking fare details
 
 ## Run locally
 
