@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GoComet DAW Console</title>
+    <style>
+      :root {
+        --bg: #eef4ef;
+        --panel: #ffffff;
+        --ink: #10271b;
+        --muted: #4a6154;
+        --line: #cbddd0;
+        --driver: #0f5e3f;
+        --rider: #1d4c86;
+      }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: linear-gradient(135deg, #e9f7ec 0%, #eef4ef 45%, #e7f0fa 100%);
+      }
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      h1 { margin: 0 0 6px; }
+      .sub { margin: 0 0 16px; color: var(--muted); }
+      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .panel {
+        background: var(--panel);
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        padding: 14px;
+        box-shadow: 0 10px 24px rgba(10, 35, 22, 0.08);
+      }
+      .panel h2 { margin: 0 0 10px; font-size: 18px; }
+      .driver-title { color: var(--driver); }
+      .rider-title { color: var(--rider); }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        margin-bottom: 10px;
+      }
+      h3 { margin: 0 0 8px; font-size: 14px; }
+      input, select, button {
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px;
+        font-size: 14px;
+      }
+      button { color: #fff; border: none; cursor: pointer; }
+      .driver-btn { background: var(--driver); }
+      .driver-btn:hover { background: #0b4a31; }
+      .rider-btn { background: var(--rider); }
+      .rider-btn:hover { background: #143a68; }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .result {
+        background: #f5faf6;
+        border: 1px dashed #adc8b6;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        margin-bottom: 8px;
+      }
+      pre {
+        margin: 10px 0 0;
+        max-height: 260px;
+        overflow: auto;
+        background: #0d1c14;
+        color: #ccf5df;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+      }
+      @media (max-width: 900px) {
+        .split { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>GoComet DAW Ride Hailing Console</h1>
+      <p class="sub">Two consoles: rider sees surge price before booking; driver can go online/offline and manage trip.</p>
+
+      <div class="split">
+        <section class="panel">
+          <h2 class="driver-title">Driver Console</h2>
+
+          <div class="card">
+            <h3>Context</h3>
+            <input id="tenant" value="tenant-a" placeholder="tenant" />
+            <input id="region" value="in-blr" placeholder="region" />
+            <select id="tier">
+              <option value="mini">mini</option>
+              <option value="sedan">sedan</option>
+              <option value="suv">suv</option>
+              <option value="premium">premium</option>
+            </select>
+          </div>
+
+          <div class="card">
+            <h3>Driver Presence</h3>
+            <input id="driverId" value="driver-1" placeholder="driver id" />
+            <select id="driverSpot"></select>
+            <button class="driver-btn" id="registerDriverBtn">Register Driver</button>
+            <button class="driver-btn" id="driverOnlineBtn">Go Online At Spot</button>
+            <button class="driver-btn" id="driverOfflineBtn">Go Offline</button>
+          </div>
+
+          <div class="card">
+            <h3>Ride Assignment</h3>
+            <input id="rideId" placeholder="ride id" />
+            <button class="driver-btn" id="driverDeclineBtn">Decline Current Ride</button>
+          </div>
+
+          <div class="card">
+            <h3>Trip Lifecycle</h3>
+            <input id="tripId" placeholder="trip id" />
+            <button class="driver-btn" id="tripStartBtn">Start Trip</button>
+            <button class="driver-btn" id="tripEndBtn">End Trip</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="rider-title">Rider Console</h2>
+
+          <div class="card">
+            <h3>Pre-Booking Price</h3>
+            <input id="riderId" value="rider-1" placeholder="rider id" />
+            <select id="pickupSpot"></select>
+            <select id="dropSpot"></select>
+            <select id="paymentMethod">
+              <option value="upi">upi</option>
+              <option value="card">card</option>
+              <option value="cash">cash</option>
+              <option value="wallet">wallet</option>
+            </select>
+            <button class="rider-btn" id="estimateFareBtn">Check Price Before Booking</button>
+            <div id="estimateResult" class="result">No estimate yet.</div>
+            <button class="rider-btn" id="createRideBtn">Book Ride (Auto Assign Nearest)</button>
+            <button class="rider-btn" id="payBtn">Pay For Ride</button>
+          </div>
+
+          <div class="card">
+            <h3>Live Events + API Responses</h3>
+            <button class="rider-btn" id="connectEventsBtn">Connect Live Stream</button>
+            <pre id="log"></pre>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
