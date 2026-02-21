@@ -6,6 +6,7 @@ from backend.events import event_bus
 from backend.idempotency import require_idempotency_key, run_idempotent
 from backend.schemas import PaymentRequest
 from backend.services.payment_service import trigger_payment
+from backend.utils.region_guard import ensure_region_local
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -17,6 +18,7 @@ async def create_payment(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     require_idempotency_key(idempotency_key)
+    ensure_region_local(request.region)
 
     def _action():
         payment = trigger_payment(db, tenant_id=request.tenant_id, region=request.region, ride_id=request.ride_id)

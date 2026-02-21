@@ -25,6 +25,7 @@ Multi-tenant, multi-region ride hailing backend + live frontend built with FastA
 - Dynamic surge pricing based on demand/supply
   - Surge moves in practical fixed steps: `1.0x -> 1.2x -> 1.4x -> 1.6x ...`
 - Driver matching with Redis GEO index (if enabled) and DB fallback
+- High-throughput location ingest path: Redis-first writes + throttled write-behind sync to DB
 - Caching on `GET /v1/rides/{id}` using Redis or local TTL cache
 - Payment flow via external PSP (Cashfree) with simulation fallback and retry-friendly state
 - Pytest tests for end-to-end and idempotency behavior
@@ -53,6 +54,27 @@ Multi-tenant, multi-region ride hailing backend + live frontend built with FastA
   - Payment workflow supports `payment_failed -> payment_pending -> paid`
   - Driver assignment is automatic to nearest available; driver action is decline-only, triggering reassignment
   - Trip end uses route coordinates + runtime to compute distance/duration automatically (no manual meter input)
+  - Requested rides auto-expire after timeout (`RIDE_REQUEST_TIMEOUT_SEC`, default 300s)
+  - Region-local write guard available via `LOCAL_REGION` to avoid cross-region write coupling
+
+## Scale Notes
+
+- Designed for high-load patterns:
+  - ~100k drivers
+  - ~10k ride requests/min
+  - up to very high location update throughput using Redis hot-path
+- Location updates:
+  - API writes location directly to Redis GEO + metadata cache
+  - DB sync is throttled (`LOCATION_DB_SYNC_INTERVAL_SEC`) to reduce write amplification
+- Matching:
+  - Candidate lookup is cache-first from Redis GEO
+  - Final allocation consistency still enforced by DB row locks
+- Horizontal stateless APIs:
+  - API instances keep no in-process state
+  - Safe to scale replicas behind load balancer
+- Region-local writes:
+  - Set `LOCAL_REGION` in each regional deployment
+  - Cross-region write requests are rejected early
 
 ## Project structure
 
@@ -107,6 +129,11 @@ uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
 - `REDIS_URL` (default `redis://localhost:6379/0`)
 - `CORS_ORIGINS` (default `*`)
 - `NEW_RELIC_ENABLED` (`true`/`false`)
+- `LOCAL_REGION` (optional; enforce in-region writes)
+- `DISPATCH_CANDIDATE_POOL_SIZE` (default `64`)
+- `LOCATION_DB_SYNC_INTERVAL_SEC` (default `15`)
+- `DRIVER_META_TTL_SEC` (default `120`)
+- `RIDE_REQUEST_TIMEOUT_SEC` (default `300`)
 - `PAYMENT_PROVIDER` (`cashfree` or `simulated`)
 - `CASHFREE_ENABLED` (`true`/`false`)
 - `CASHFREE_BASE_URL` (default sandbox URL)

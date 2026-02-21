@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     app_name: str = "GoComet DAW Ride Hailing"
     env: str = "dev"
     api_prefix: str = "/v1"
+    local_region: str = ""
 
     database_url: str = "sqlite:///./ride_hailing.db"
     redis_url: str = "redis://localhost:6379/0"
@@ -12,6 +13,10 @@ class Settings(BaseSettings):
 
     default_search_radius_km: float = 8.0
     assignment_offer_timeout_sec: int = 20
+    ride_request_timeout_sec: int = 300
+    dispatch_candidate_pool_size: int = 64
+    location_db_sync_interval_sec: int = 15
+    driver_meta_ttl_sec: int = 120
     surge_base: float = 1.0
     surge_max: float = 3.0
 

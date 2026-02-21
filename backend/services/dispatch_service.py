@@ -1,3 +1,4 @@
+import datetime as dt
 import math
 from typing import Any
 
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.models import Driver, Ride, Trip
 from backend.redis_client import get_redis_client
+from backend.services.ride_timeout_service import is_ride_request_timed_out
 from backend.utils.state_machine import RIDE_TRANSITIONS, transition
 
 
@@ -23,14 +25,42 @@ def _redis_geo_key(tenant_id: str, region: str, tier: str) -> str:
     return f"drivers_geo:{tenant_id}:{region}:{tier}"
 
 
-def update_driver_location_index(driver: Driver):
-    if driver.lat is None or driver.lng is None:
-        return
+def _redis_driver_meta_key(driver_id: str) -> str:
+    return f"driver_meta:{driver_id}"
+
+
+def _redis_driver_loc_key(driver_id: str) -> str:
+    return f"driver_loc:{driver_id}"
+
+
+def _cache_driver_meta(driver: Driver):
     redis_client = get_redis_client()
     if not redis_client:
         return
-    key = _redis_geo_key(driver.tenant_id, driver.region, driver.vehicle_tier)
-    redis_client.geoadd(key, (driver.lng, driver.lat, driver.id))
+
+    mapping = {
+        "tenant_id": driver.tenant_id,
+        "region": driver.region,
+        "vehicle_tier": driver.vehicle_tier,
+        "status": driver.status,
+        "is_online": "1" if driver.is_online else "0",
+    }
+
+    pipe = redis_client.pipeline()
+    pipe.hset(_redis_driver_meta_key(driver.id), mapping=mapping)
+    pipe.expire(_redis_driver_meta_key(driver.id), settings.driver_meta_ttl_sec)
+
+    if driver.lat is not None and driver.lng is not None:
+        pipe.hset(_redis_driver_loc_key(driver.id), mapping={"lat": str(driver.lat), "lng": str(driver.lng)})
+        pipe.expire(_redis_driver_loc_key(driver.id), settings.driver_meta_ttl_sec)
+        geo_key = _redis_geo_key(driver.tenant_id, driver.region, driver.vehicle_tier)
+        if driver.is_online and driver.status == "available":
+            pipe.geoadd(geo_key, (float(driver.lng), float(driver.lat), driver.id))
+            pipe.expire(geo_key, settings.driver_meta_ttl_sec)
+        else:
+            pipe.zrem(geo_key, driver.id)
+
+    pipe.execute()
 
 
 def register_driver(db: Session, driver_id: str, tenant_id: str, region: str, vehicle_tier: str) -> Driver:
@@ -53,6 +83,7 @@ def register_driver(db: Session, driver_id: str, tenant_id: str, region: str, ve
         db.add(driver)
     db.commit()
     db.refresh(driver)
+    _cache_driver_meta(driver)
     return driver
 
 
@@ -70,10 +101,73 @@ def set_driver_offline(db: Session, driver_id: str, tenant_id: str, region: str)
     driver.status = "offline"
     db.commit()
     db.refresh(driver)
+
+    redis_client = get_redis_client()
+    if redis_client:
+        pipe = redis_client.pipeline()
+        pipe.hset(_redis_driver_meta_key(driver.id), mapping={"status": "offline", "is_online": "0"})
+        pipe.expire(_redis_driver_meta_key(driver.id), settings.driver_meta_ttl_sec)
+        pipe.zrem(_redis_geo_key(driver.tenant_id, driver.region, driver.vehicle_tier), driver.id)
+        pipe.execute()
+
     return driver
 
 
-def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: str, lat: float, lng: float) -> Driver:
+def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: str, lat: float, lng: float) -> dict[str, Any]:
+    redis_client = get_redis_client()
+    now = dt.datetime.utcnow()
+
+    # Hot path: Redis-first location write for very high update throughput.
+    if redis_client:
+        meta_key = _redis_driver_meta_key(driver_id)
+        meta = redis_client.hgetall(meta_key)
+        if meta:
+            if meta.get("tenant_id") != tenant_id or meta.get("region") != region:
+                raise HTTPException(status_code=400, detail="Driver tenant/region mismatch")
+
+            vehicle_tier = meta.get("vehicle_tier", "mini")
+            status = meta.get("status", "available")
+            if status == "offline":
+                status = "available"
+
+            pipe = redis_client.pipeline()
+            pipe.hset(meta_key, mapping={"status": status, "is_online": "1"})
+            pipe.expire(meta_key, settings.driver_meta_ttl_sec)
+            pipe.hset(_redis_driver_loc_key(driver_id), mapping={"lat": str(lat), "lng": str(lng)})
+            pipe.expire(_redis_driver_loc_key(driver_id), settings.driver_meta_ttl_sec)
+            pipe.geoadd(_redis_geo_key(tenant_id, region, vehicle_tier), (lng, lat, driver_id))
+            pipe.expire(_redis_geo_key(tenant_id, region, vehicle_tier), settings.driver_meta_ttl_sec)
+            pipe.execute()
+
+            # Write-behind throttle: sync operational DB once per interval per driver.
+            sync_key = f"driver_dbsync:{driver_id}"
+            should_sync = redis_client.set(sync_key, "1", ex=settings.location_db_sync_interval_sec, nx=True)
+            if should_sync:
+                driver = db.query(Driver).filter(Driver.id == driver_id).first()
+                if not driver:
+                    raise HTTPException(status_code=404, detail="Driver not found; register driver first")
+                if driver.tenant_id != tenant_id or driver.region != region:
+                    raise HTTPException(status_code=400, detail="Driver tenant/region mismatch")
+                driver.lat = lat
+                driver.lng = lng
+                driver.is_online = True
+                if driver.status == "offline":
+                    driver.status = "available"
+                driver.last_seen_at = now
+                db.commit()
+                status = driver.status
+
+            return {
+                "id": driver_id,
+                "tenant_id": tenant_id,
+                "region": region,
+                "status": status,
+                "lat": lat,
+                "lng": lng,
+                "last_seen_at": now.isoformat(),
+            }
+
+    # Fallback path: DB-first.
     driver = db.query(Driver).filter(Driver.id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found; register driver first")
@@ -86,41 +180,58 @@ def upsert_driver_location(db: Session, driver_id: str, tenant_id: str, region: 
     driver.is_online = True
     if driver.status == "offline":
         driver.status = "available"
+    driver.last_seen_at = now
     db.commit()
     db.refresh(driver)
-    update_driver_location_index(driver)
-    return driver
+    _cache_driver_meta(driver)
+
+    return {
+        "id": driver.id,
+        "tenant_id": driver.tenant_id,
+        "region": driver.region,
+        "status": driver.status,
+        "lat": driver.lat,
+        "lng": driver.lng,
+        "last_seen_at": driver.last_seen_at.isoformat(),
+    }
 
 
-def _candidate_drivers(db: Session, ride: Ride, exclude_driver_ids: set[str] | None = None) -> list[tuple[Driver, float]]:
+def _candidate_driver_ids(db: Session, ride: Ride, exclude_driver_ids: set[str] | None = None) -> list[tuple[str, float]]:
     redis_client = get_redis_client()
-    candidates: list[tuple[Driver, float]] = []
+    candidates: list[tuple[str, float]] = []
     exclude_driver_ids = exclude_driver_ids or set()
 
     if redis_client:
         key = _redis_geo_key(ride.tenant_id, ride.region, ride.tier)
-        nearby_ids = redis_client.georadius(key, ride.pickup_lng, ride.pickup_lat, settings.default_search_radius_km, unit="km", count=20)
-        if nearby_ids:
-            nearby_ids = [d for d in nearby_ids if d not in exclude_driver_ids]
-            driver_rows = (
-                db.query(Driver)
-                .filter(
-                    Driver.id.in_(nearby_ids),
-                    Driver.status == "available",
-                    Driver.is_online.is_(True),
-                    Driver.tenant_id == ride.tenant_id,
-                    Driver.region == ride.region,
-                    Driver.vehicle_tier == ride.tier,
-                )
-                .all()
-            )
-            for d in driver_rows:
-                if d.lat is None or d.lng is None:
-                    continue
-                candidates.append((d, haversine_km(ride.pickup_lat, ride.pickup_lng, d.lat, d.lng)))
+        nearby = redis_client.georadius(
+            key,
+            ride.pickup_lng,
+            ride.pickup_lat,
+            settings.default_search_radius_km,
+            unit="km",
+            count=settings.dispatch_candidate_pool_size,
+            sort="ASC",
+            withdist=True,
+        )
+        for member, distance in nearby or []:
+            driver_id = str(member)
+            if driver_id in exclude_driver_ids:
+                continue
+            meta = redis_client.hgetall(_redis_driver_meta_key(driver_id))
+            if not meta:
+                continue
+            if meta.get("tenant_id") != ride.tenant_id or meta.get("region") != ride.region:
+                continue
+            if meta.get("vehicle_tier") != ride.tier:
+                continue
+            if meta.get("status") != "available":
+                continue
+            if meta.get("is_online") != "1":
+                continue
+            candidates.append((driver_id, float(distance)))
 
     if candidates:
-        return sorted(candidates, key=lambda c: c[1])
+        return candidates
 
     rows = (
         db.query(Driver)
@@ -133,32 +244,37 @@ def _candidate_drivers(db: Session, ride: Ride, exclude_driver_ids: set[str] | N
             Driver.lat.is_not(None),
             Driver.lng.is_not(None),
         )
-        .limit(200)
+        .limit(settings.dispatch_candidate_pool_size)
         .all()
     )
-    for d in rows:
-        if d.id in exclude_driver_ids:
+    for driver in rows:
+        if driver.id in exclude_driver_ids:
             continue
-        distance = haversine_km(ride.pickup_lat, ride.pickup_lng, float(d.lat), float(d.lng))
+        distance = haversine_km(ride.pickup_lat, ride.pickup_lng, float(driver.lat), float(driver.lng))
         if distance <= settings.default_search_radius_km:
-            candidates.append((d, distance))
+            candidates.append((driver.id, distance))
 
-    return sorted(candidates, key=lambda c: c[1])
+    return sorted(candidates, key=lambda item: item[1])
 
 
 def assign_driver_to_ride(db: Session, ride: Ride, exclude_driver_ids: set[str] | None = None) -> dict[str, Any]:
+    if is_ride_request_timed_out(ride):
+        ride.status = "expired"
+        db.commit()
+        return {"assigned": False, "reason": "No driver found within timeout window"}
+
     if ride.status not in {"requested"}:
         return {"assigned": False, "reason": f"Ride status is {ride.status}"}
 
-    for candidate, distance in _candidate_drivers(db, ride, exclude_driver_ids=exclude_driver_ids):
-        driver = db.query(Driver).filter(Driver.id == candidate.id).with_for_update().first()
+    for candidate_driver_id, distance in _candidate_driver_ids(db, ride, exclude_driver_ids=exclude_driver_ids):
+        driver = db.query(Driver).filter(Driver.id == candidate_driver_id).with_for_update().first()
         ride_locked = db.query(Ride).filter(Ride.id == ride.id).with_for_update().first()
         if not driver or not ride_locked:
             continue
         if ride_locked.status != "requested":
             db.rollback()
             return {"assigned": False, "reason": f"Ride status changed to {ride_locked.status}"}
-        if driver.status != "available":
+        if driver.status != "available" or not driver.is_online:
             db.rollback()
             continue
 
@@ -185,6 +301,7 @@ def assign_driver_to_ride(db: Session, ride: Ride, exclude_driver_ids: set[str] 
         db.commit()
         db.refresh(ride_locked)
         db.refresh(trip)
+        _cache_driver_meta(driver)
         return {
             "assigned": True,
             "driver_id": driver.id,
@@ -223,6 +340,7 @@ def driver_decline_ride(db: Session, tenant_id: str, region: str, driver_id: str
 
     db.commit()
     db.refresh(ride)
+    _cache_driver_meta(driver)
 
     reassignment = assign_driver_to_ride(db, ride, exclude_driver_ids={driver_id})
     return {

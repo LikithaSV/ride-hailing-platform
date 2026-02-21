@@ -6,6 +6,7 @@ from backend.events import event_bus
 from backend.idempotency import require_idempotency_key, run_idempotent
 from backend.schemas import DriverDeclineRequest, DriverLocationRequest, DriverRegisterRequest, DriverStatusRequest
 from backend.services.dispatch_service import driver_decline_ride, register_driver, set_driver_offline, upsert_driver_location
+from backend.utils.region_guard import ensure_region_local
 
 router = APIRouter(prefix="/drivers", tags=["drivers"])
 
@@ -18,6 +19,7 @@ async def register_driver_endpoint(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     require_idempotency_key(idempotency_key)
+    ensure_region_local(request.region)
 
     def _action():
         driver = register_driver(
@@ -46,7 +48,8 @@ async def update_location(
     request: DriverLocationRequest,
     db: Session = Depends(get_db),
 ):
-    driver = upsert_driver_location(
+    ensure_region_local(request.region)
+    payload = upsert_driver_location(
         db,
         driver_id=driver_id,
         tenant_id=request.tenant_id,
@@ -54,14 +57,6 @@ async def update_location(
         lat=request.lat,
         lng=request.lng,
     )
-    payload = {
-        "id": driver.id,
-        "tenant_id": driver.tenant_id,
-        "region": driver.region,
-        "status": driver.status,
-        "lat": driver.lat,
-        "lng": driver.lng,
-    }
     await event_bus.publish(request.tenant_id, "driver.location.updated", payload)
     return payload
 
@@ -74,6 +69,7 @@ async def set_offline(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     require_idempotency_key(idempotency_key)
+    ensure_region_local(request.region)
 
     def _action():
         driver = set_driver_offline(db, driver_id=driver_id, tenant_id=request.tenant_id, region=request.region)
@@ -98,6 +94,7 @@ async def decline_ride(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     require_idempotency_key(idempotency_key)
+    ensure_region_local(request.region)
 
     def _action():
         outcome = driver_decline_ride(

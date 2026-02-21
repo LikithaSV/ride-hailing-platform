@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -6,6 +7,8 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_ride_hailing.db"
 os.environ["REDIS_ENABLED"] = "false"
 
 from backend.app import app  # noqa: E402
+from backend.db import SessionLocal  # noqa: E402
+from backend.models import Ride  # noqa: E402
 
 
 def headers(key: str):
@@ -34,6 +37,41 @@ def test_prebooking_estimate_returns_surge_and_fares():
         assert payload["distance_km"] > 0
         assert payload["surge_multiplier"] >= 1.0
         assert payload["estimated_fare"] >= payload["fare_without_surge"]
+
+
+def test_requested_ride_expires_after_timeout_window():
+    tenant = "tenant-timeout"
+    region = "in-blr"
+
+    db = SessionLocal()
+    ride = Ride(
+        tenant_id=tenant,
+        region=region,
+        rider_id="r-timeout",
+        pickup_lat=12.9716,
+        pickup_lng=77.5946,
+        destination_lat=12.9352,
+        destination_lng=77.6245,
+        tier="mini",
+        payment_method="upi",
+        status="requested",
+        surge_multiplier=1.0,
+        fare_estimate=100.0,
+        created_at=datetime.utcnow() - timedelta(minutes=6),
+        updated_at=datetime.utcnow() - timedelta(minutes=6),
+    )
+    db.add(ride)
+    db.commit()
+    db.refresh(ride)
+    ride_id = ride.id
+    db.close()
+
+    with TestClient(app) as client:
+        response = client.get(f"/v1/rides/{ride_id}", params={"tenant_id": tenant})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "expired"
+        assert body["status_reason"] == "No driver available within 5 minutes"
 
 
 def test_end_to_end_flow_with_auto_assignment():
